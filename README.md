@@ -265,11 +265,10 @@ with open("license.lic", "w", encoding="utf-8") as f:
 ### 在线版特性
 
 - **纯前端单文件应用**：单个 HTML 文件，无需服务器后端，可直接部署到任意静态托管平台
+- **浏览器直接生成 EXE**：通过 fetch 加载 template.exe，在浏览器中拼接配置数据生成完整可执行的 EXE 文件，无需桌面版打包器
 - **双模式支持**：在线网址配置 + 本地文件夹打包（拖拽上传，自动检测 index.html）
 - **完整配置项**：应用名称、窗口尺寸、滚动文字、图标上传预览、窗口功能选项（最大化/最小化/置顶/托盘/居中）
-- **配置生成与下载**：
-  - 在线模式：生成 JSON 配置文件下载
-  - 本地模式：使用 JSZip 将所有文件 + 配置打包为 ZIP 下载
+- **EXE 格式完全兼容**：生成的 EXE 使用与桌面版相同的 overlay 数据格式（MAGIC + 配置 + 图标 + ZIP + END_MAGIC），打包后的程序功能与桌面版完全一致
 - **与桌面版 UI 一致**：青色 #20B2AA 主题、Microsoft YaHei 字体、扁平化设计
 - **部署平台**：GitHub Pages / Gitee Pages / Cloudflare Pages / Vercel 等任意静态托管平台
 
@@ -282,19 +281,19 @@ with open("license.lic", "w", encoding="utf-8") as f:
 3. 填写应用信息（名称、窗口尺寸、滚动文字、图标）
 4. 勾选窗口功能选项（最大化 / 最小化 / 置顶 / 托盘 / 居中）
 5. 点击「开始打包」按钮
-6. 下载生成的配置文件（在线模式为 JSON，本地模式为 ZIP 资源包）
-7. 将下载的配置文件/资源包交给桌面版打包器，完成最终 EXE 打包
+6. 等待进度条完成，点击下载生成的 EXE 文件
+7. 将 EXE 文件分发给用户即可（目标电脑需安装 WebView2 Runtime）
 
 ### 部署方法
 
-将 `分发/web/HtmlToExe-Web.html` 文件上传至任意静态托管平台即可：
+将 `分发/web/HtmlToExe-Web.html` 和 `分发/web/template.exe` 文件上传至任意静态托管平台即可：
 
-- **GitHub Pages**：将文件放入仓库根目录，启用 GitHub Pages
+- **GitHub Pages**：将两个文件放入仓库根目录，启用 GitHub Pages
 - **Gitee Pages**：将文件上传至 Gitee 仓库，开启 Gitee Pages 服务
-- **Cloudflare Pages / Vercel / Netlify**：直接部署单个 HTML 文件
-- **本地使用**：直接在浏览器中打开该 HTML 文件即可使用
+- **Cloudflare Pages / Vercel / Netlify**：直接部署 HTML + template.exe
+- **本地使用**：直接在浏览器中打开 HTML 文件即可使用（template.exe 需在同一目录）
 
-> 在线版生成配置文件和资源包，最终 EXE 打包仍需桌面版打包器完成（因 EXE 资源写入需本地编译环境）。
+> 在线版通过 fetch 加载 template.exe，在浏览器中直接拼接生成完整 EXE 文件。生成的 EXE 与桌面版打包器输出格式完全兼容。
 
 ---
 
