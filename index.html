@@ -702,7 +702,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         <div class="header">
             <div>
                 <div class="header-title">HtmlToExe 网页打包器</div>
-                <div class="header-subtitle">将网页打包成独立 EXE 桌面程序 — 在线版</div>
+                <div class="header-subtitle">将网页打包成独立 EXE 桌面程序 — 浏览器直接生成</div>
             </div>
             <div class="header-info">
                 开发者：Journeyer<br>
@@ -839,7 +839,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         <!-- Footer -->
         <div class="footer">
             Copyright &copy; 2026 Journeyer. All rights reserved.<br>
-            交流群：561116458 | 本工具生成配置文件，需配合桌面版打包器完成最终 EXE 打包
+            交流群：561116458 | 在线版直接生成 EXE，无需桌面版打包器
         </div>
     </div>
 
@@ -853,7 +853,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             <div class="modal-body">
                 <h3>软件简介</h3>
                 <p>HtmlToExe 是一款将网页（在线网址或本地HTML文件夹）打包成独立 EXE 程序的工具。打包后的程序使用 WebView2 技术渲染网页，无需浏览器即可运行。</p>
-                <p>本在线版生成打包配置文件，需配合桌面版打包器完成最终 EXE 打包。</p>
+                <p>本在线版可直接在浏览器中生成完整 EXE 文件，无需下载桌面版打包器。</p>
 
                 <h3>使用方法</h3>
                 <p><strong>一、选择打包模式：</strong></p>
@@ -877,9 +877,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
                     <li><strong>居中</strong> — 窗口在屏幕居中显示</li>
                 </ul>
                 <p><strong>四、点击「开始打包」按钮</strong></p>
-                <p>在线版将生成配置文件（JSON）供下载。本地模式还会将文件夹打包为 ZIP。</p>
-                <p><strong>五、使用桌面版打包器完成最终打包</strong></p>
-                <p>将下载的配置文件和资源包交给桌面版打包器，生成最终 EXE 程序。</p>
+                <p>在线版将直接在浏览器中生成完整的 EXE 文件，点击下载即可。</p>
 
                 <h3>必备环境</h3>
                 <p>1. 操作系统：Windows 7 SP1 或更高版本</p>
@@ -953,8 +951,29 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         let currentMode = 'url';
         let uploadedFiles = [];
         let iconFile = null;
-        let iconBase64 = null;
+        let iconArrayBuffer = null;
         let isPacking = false;
+        let templateExeBuffer = null;  // template.exe ArrayBuffer
+
+        // ===== Load template.exe =====
+        async function loadTemplate() {
+            try {
+                // Try relative path first, then absolute
+                let resp;
+                try {
+                    resp = await fetch('template.exe');
+                } catch(e) {
+                    resp = await fetch('./template.exe');
+                }
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                templateExeBuffer = await resp.arrayBuffer();
+                console.log('template.exe loaded: ' + templateExeBuffer.byteLength + ' bytes');
+            } catch(err) {
+                console.warn('template.exe not loaded: ' + err.message);
+            }
+        }
+        // Auto-load on page start
+        loadTemplate();
 
         // ===== Mode Toggle =====
         document.querySelectorAll('input[name="mode"]').forEach(radio => {
@@ -1095,14 +1114,20 @@ https://github.com/nodeca/pako/blob/main/LICENSE
                 iconFile = e.target.files[0];
                 document.getElementById('iconPath').value = iconFile.name;
 
-                // Preview
+                // Read as ArrayBuffer for EXE embedding, and DataURL for preview
                 const reader = new FileReader();
                 reader.onload = function(ev) {
-                    iconBase64 = ev.target.result;
+                    iconArrayBuffer = ev.target.result;
+                };
+                reader.readAsArrayBuffer(iconFile);
+
+                // Preview
+                const previewReader = new FileReader();
+                previewReader.onload = function(ev) {
                     const preview = document.getElementById('iconPreview');
                     preview.innerHTML = '<img src="' + ev.target.result + '" alt="icon">';
                 };
-                reader.readAsDataURL(iconFile);
+                previewReader.readAsDataURL(iconFile);
             }
         });
 
@@ -1120,9 +1145,19 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             }
         });
 
-        // ===== Pack =====
+        // ===== Pack (Generate EXE directly in browser) =====
         async function startPack() {
             if (isPacking) return;
+
+            // Check template.exe loaded
+            if (!templateExeBuffer) {
+                showToast('正在加载模板引擎，请稍后再试...', 'info');
+                await loadTemplate();
+                if (!templateExeBuffer) {
+                    showToast('模板引擎加载失败，请刷新页面重试', 'error');
+                    return;
+                }
+            }
 
             // Validate
             const appName = document.getElementById('appName').value.trim();
@@ -1161,80 +1196,129 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             document.getElementById('resultArea').classList.remove('show');
 
             try {
-                // Build config
-                const config = {
-                    appName: appName,
-                    mode: currentMode,
-                    url: currentMode === 'url' ? document.getElementById('urlInput').value.trim() : '',
-                    width: winWidth,
-                    height: winHeight,
-                    scrollText: document.getElementById('scrollText').value.trim(),
-                    allowMaximize: document.getElementById('chkMaximize').checked,
-                    allowMinimize: document.getElementById('chkMinimize').checked,
-                    alwaysOnTop: document.getElementById('chkTopmost').checked,
-                    systemTray: document.getElementById('chkTray').checked,
-                    centerWindow: document.getElementById('chkCenter').checked,
-                    hasIcon: iconFile !== null,
-                    iconName: iconFile ? iconFile.name : '',
-                    iconData: iconBase64 || '',
-                    fileCount: currentMode === 'local' ? uploadedFiles.length : 0,
-                    generatedAt: new Date().toISOString(),
-                    generator: 'HtmlToExe Web Packager v1.0',
-                    developer: 'Journeyer'
-                };
+                updateProgress(10, '正在构建配置...');
 
-                updateProgress(20, '正在生成配置文件...');
+                // Build config JSON (matching C packager format exactly)
+                const url = currentMode === 'url' ? document.getElementById('urlInput').value.trim() : '';
+                const scrollText = document.getElementById('scrollText').value.trim();
+                const entryFile = currentMode === 'local' ? 'index.html' : '';
+                const allowMax = document.getElementById('chkMaximize').checked ? 1 : 0;
+                const allowMin = document.getElementById('chkMinimize').checked ? 1 : 0;
+                const onTop = document.getElementById('chkTopmost').checked ? 1 : 0;
+                const tray = document.getElementById('chkTray').checked ? 1 : 0;
+                const center = document.getElementById('chkCenter').checked ? 1 : 0;
 
-                const configJson = JSON.stringify(config, null, 2);
-                updateProgress(40, '配置文件生成完成');
+                // Escape quotes in strings to match C sprintf behavior
+                const safeName = appName.replace(/"/g, '');
+                const safeUrl = url.replace(/"/g, '');
+                const safeScroll = scrollText.replace(/"/g, '');
+                const safeEntry = entryFile.replace(/"/g, '');
 
-                let downloadUrl = null;
-                let downloadName = '';
+                const configJson = '{"title":"' + safeName + '","width":' + winWidth +
+                    ',"height":' + winHeight + ',"resizable":1,"entryFile":"' + safeEntry +
+                    '","url":"' + safeUrl + '","scrollText":"' + safeScroll +
+                    '","allowMaximize":' + allowMax + ',"allowMinimize":' + allowMin +
+                    ',"alwaysOnTop":' + onTop + ',"systemTray":' + tray +
+                    ',"centerWindow":' + center + '}';
 
+                updateProgress(20, '配置构建完成');
+
+                // Get icon data
+                let iconData = null;
+                let iconLen = 0;
+                if (iconFile && iconArrayBuffer) {
+                    iconData = iconArrayBuffer;
+                    iconLen = iconArrayBuffer.byteLength;
+                    updateProgress(30, '图标数据已加载: ' + iconLen + ' bytes');
+                } else {
+                    updateProgress(30, '无自定义图标，使用默认图标');
+                }
+
+                // Build ZIP for local mode
+                let zipData = null;
+                let zipLen = 0;
                 if (currentMode === 'local') {
-                    updateProgress(50, '正在打包本地文件...');
-
-                    // Create ZIP with JSZip
+                    updateProgress(35, '正在打包本地文件...');
                     const zip = new JSZip();
                     for (let i = 0; i < uploadedFiles.length; i++) {
                         const f = uploadedFiles[i];
                         const path = f.webkitRelativePath || f.name;
-                        // Remove top-level folder name to keep relative paths
                         const parts = path.split('/');
-                        if (parts.length > 1) {
-                            parts.shift(); // Remove first folder
-                        }
+                        if (parts.length > 1) parts.shift();
                         const zipPath = parts.join('/');
                         zip.file(zipPath, f);
-                        updateProgress(50 + Math.round((i / uploadedFiles.length) * 30), '正在添加文件: ' + (i+1) + '/' + uploadedFiles.length);
+                        if (i % 10 === 0) {
+                            updateProgress(35 + Math.round((i / uploadedFiles.length) * 25),
+                                '正在添加文件: ' + (i+1) + '/' + uploadedFiles.length);
+                        }
                     }
-
-                    // Add config to ZIP
-                    zip.file('packager_config.json', configJson);
-
-                    updateProgress(85, '正在压缩...');
-
-                    const blob = await zip.generateAsync({
-                        type: 'blob',
+                    updateProgress(60, '正在压缩文件...');
+                    const zipBlob = await zip.generateAsync({
+                        type: 'arraybuffer',
                         compression: 'DEFLATE',
                         compressionOptions: { level: 6 }
                     }, function(meta) {
-                        updateProgress(85 + Math.round(meta.percent * 0.1), '正在压缩: ' + Math.round(meta.percent) + '%');
+                        updateProgress(60 + Math.round(meta.percent * 0.15),
+                            '正在压缩: ' + Math.round(meta.percent) + '%');
                     });
-
-                    downloadUrl = URL.createObjectURL(blob);
-                    downloadName = appName + '_pack.zip';
-                    updateProgress(100, '打包完成！');
-                } else {
-                    // Online mode: just download config JSON
-                    const blob = new Blob([configJson], { type: 'application/json' });
-                    downloadUrl = URL.createObjectURL(blob);
-                    downloadName = appName + '_config.json';
-                    updateProgress(100, '配置文件生成完成！');
+                    zipData = zipBlob;
+                    zipLen = zipBlob.byteLength;
                 }
 
+                updateProgress(80, '正在生成 EXE 文件...');
+
+                // Build tail data (overlay format matching C packager)
+                // Format: MAGIC(4) + version(4) + subVersion(4) + config(N) + configLen(4) + icon(M) + iconLen(4) + zip(K) + zipLen(4) + END_MAGIC(4)
+                const configBytes = new TextEncoder().encode(configJson);
+                const configLen = configBytes.length;
+                const tailSize = 4+4+4 + configLen+4 + iconLen+4 + zipLen+4 + 4;
+                const tail = new ArrayBuffer(tailSize);
+                const view = new DataView(tail);
+                const tailBytes = new Uint8Array(tail);
+                let offset = 0;
+
+                // MAGIC = 0x32455748 (little-endian)
+                view.setUint32(offset, 0x32455748, true); offset += 4;
+                // version = 1
+                view.setUint32(offset, 1, true); offset += 4;
+                // subVersion = 1
+                view.setUint32(offset, 1, true); offset += 4;
+                // config JSON
+                tailBytes.set(configBytes, offset); offset += configLen;
+                // configLen
+                view.setUint32(offset, configLen, true); offset += 4;
+                // icon data
+                if (iconData && iconLen > 0) {
+                    tailBytes.set(new Uint8Array(iconData), offset); offset += iconLen;
+                }
+                // iconLen
+                view.setUint32(offset, iconLen, true); offset += 4;
+                // zip data
+                if (zipData && zipLen > 0) {
+                    tailBytes.set(new Uint8Array(zipData), offset); offset += zipLen;
+                }
+                // zipLen
+                view.setUint32(offset, zipLen, true); offset += 4;
+                // END_MAGIC = 0x454E4421 (little-endian)
+                view.setUint32(offset, 0x454E4421, true); offset += 4;
+
+                updateProgress(90, '正在合并 EXE...');
+
+                // Concatenate: template.exe + tail data
+                const exeSize = templateExeBuffer.byteLength + tailSize;
+                const exeBuffer = new Uint8Array(exeSize);
+                exeBuffer.set(new Uint8Array(templateExeBuffer), 0);
+                exeBuffer.set(tailBytes, templateExeBuffer.byteLength);
+
+                updateProgress(100, 'EXE 生成完成！');
+
+                // Create download
+                const exeBlob = new Blob([exeBuffer], { type: 'application/octet-stream' });
+                const downloadUrl = URL.createObjectURL(exeBlob);
+                const downloadName = appName + '.exe';
+
                 // Show result
-                showResult(config, downloadUrl, downloadName, configJson);
+                showResult(downloadUrl, downloadName, configJson, exeSize);
 
             } catch(err) {
                 showToast('打包失败: ' + err.message, 'error');
@@ -1250,27 +1334,24 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             document.getElementById('progressText').textContent = text;
         }
 
-        function showResult(config, downloadUrl, downloadName, configJson) {
+        function showResult(downloadUrl, downloadName, configJson, exeSize) {
             const resultArea = document.getElementById('resultArea');
             const resultText = document.getElementById('resultText');
             const downloadArea = document.getElementById('resultDownloadArea');
             const configPreview = document.getElementById('configPreview');
 
             resultArea.classList.add('show');
+            document.getElementById('resultTitle').textContent = 'EXE 打包完成！';
 
-            if (currentMode === 'local') {
-                document.getElementById('resultTitle').textContent = '打包资源包生成完成！';
-                resultText.innerHTML = '已将 ' + uploadedFiles.length + ' 个文件和配置信息打包为 ZIP。<br>' +
-                    '请下载资源包，然后使用桌面版打包器加载此资源包完成最终 EXE 打包。';
-            } else {
-                document.getElementById('resultTitle').textContent = '打包配置生成完成！';
-                resultText.innerHTML = '已生成网页打包配置文件。<br>' +
-                    '请下载配置文件，然后使用桌面版打包器加载此配置完成最终 EXE 打包。';
-            }
+            const sizeStr = exeSize > 1048576
+                ? (exeSize / 1048576).toFixed(2) + ' MB'
+                : (exeSize / 1024).toFixed(1) + ' KB';
+
+            resultText.innerHTML = '已成功生成独立 EXE 程序，文件大小: ' + sizeStr + '<br>' +
+                '下载后可直接运行（目标电脑需安装 WebView2 Runtime）。';
 
             downloadArea.innerHTML = '<a href="' + downloadUrl + '" download="' + downloadName + '" class="result-download">下载 ' + downloadName + '</a>';
 
-            // Show config preview
             configPreview.textContent = configJson;
         }
 

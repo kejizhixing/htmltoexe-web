@@ -275,7 +275,9 @@ with open("license.lic", "w", encoding="utf-8") as f:
 
 ### 在线版使用
 
-1. 访问在线版页面（将 `HtmlToExe-Web.html` 部署到任意静态托管平台）
+**在线访问地址**：https://kejizhixing.github.io/htmltoexe-web/
+
+1. 访问在线版页面（已部署至 GitHub Pages）
 2. 选择打包模式（在线网址 / 本地文件夹）
 3. 填写应用信息（名称、窗口尺寸、滚动文字、图标）
 4. 勾选窗口功能选项（最大化 / 最小化 / 置顶 / 托盘 / 居中）
