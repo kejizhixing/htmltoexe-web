@@ -1188,6 +1188,308 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             }
         });
 
+        // ===== PE Icon Resource Injection =====
+        // Detect ICO format
+        function isICOFormat(buf) {
+            if (!buf || buf.byteLength < 6) return false;
+            const dv = new DataView(buf);
+            return dv.getUint16(0, true) === 0 && dv.getUint16(2, true) === 1;
+        }
+
+        // Convert PNG/JPG/BMP to ICO format with multiple sizes
+        async function convertImageToICO(imageBuffer) {
+            const blob = new Blob([imageBuffer]);
+            const img = await createImageBitmap(blob);
+            const sizes = [256, 48, 32, 16];
+            const entries = [];
+            for (const size of sizes) {
+                const canvas = document.createElement('canvas');
+                canvas.width = size;
+                canvas.height = size;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, size, size);
+                if (size === 256) {
+                    const dataUrl = canvas.toDataURL('image/png');
+                    const base64 = dataUrl.split(',')[1];
+                    const binary = atob(base64);
+                    const pngData = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i++) pngData[i] = binary.charCodeAt(i);
+                    entries.push({ width: 0, height: 0, data: pngData });
+                } else {
+                    const imageData = ctx.getImageData(0, 0, size, size);
+                    entries.push({ width: size, height: size, data: rgbaToDIB(imageData.data, size) });
+                }
+            }
+            const headerSize = 6 + entries.length * 16;
+            let totalSize = headerSize;
+            for (const e of entries) totalSize += e.data.length;
+            const ico = new Uint8Array(totalSize);
+            const dv = new DataView(ico.buffer);
+            dv.setUint16(0, 0, true);
+            dv.setUint16(2, 1, true);
+            dv.setUint16(4, entries.length, true);
+            let dataOffset = headerSize;
+            for (let i = 0; i < entries.length; i++) {
+                const e = entries[i];
+                const off = 6 + i * 16;
+                ico[off] = e.width & 0xFF;
+                ico[off + 1] = e.height & 0xFF;
+                ico[off + 2] = 0;
+                ico[off + 3] = 0;
+                dv.setUint16(off + 4, 1, true);
+                dv.setUint16(off + 6, 32, true);
+                dv.setUint32(off + 8, e.data.length, true);
+                dv.setUint32(off + 12, dataOffset, true);
+                ico.set(e.data, dataOffset);
+                dataOffset += e.data.length;
+            }
+            return ico.buffer;
+        }
+
+        function rgbaToDIB(pixels, size) {
+            const headerSize = 40;
+            const colorDataSize = size * size * 4;
+            const maskRowPadded = Math.ceil(Math.ceil(size / 8) / 4) * 4;
+            const maskSize = maskRowPadded * size;
+            const totalSize = headerSize + colorDataSize + maskSize;
+            const buf = new Uint8Array(totalSize);
+            const dv = new DataView(buf.buffer);
+            dv.setUint32(0, headerSize, true);
+            dv.setInt32(4, size, true);
+            dv.setInt32(8, size * 2, true);
+            dv.setUint16(12, 1, true);
+            dv.setUint16(14, 32, true);
+            dv.setUint32(16, 0, true);
+            dv.setUint32(20, colorDataSize, true);
+            let pos = headerSize;
+            for (let y = size - 1; y >= 0; y--) {
+                for (let x = 0; x < size; x++) {
+                    const idx = (y * size + x) * 4;
+                    buf[pos++] = pixels[idx + 2];
+                    buf[pos++] = pixels[idx + 1];
+                    buf[pos++] = pixels[idx];
+                    buf[pos++] = pixels[idx + 3];
+                }
+            }
+            return buf;
+        }
+
+        // Inject icon into PE .rsrc section for Windows Explorer file icon
+        function injectIconToPE(peBuffer, icoBuffer) {
+            const pe = new Uint8Array(peBuffer);
+            const dv = new DataView(peBuffer);
+            const ico = new Uint8Array(icoBuffer);
+            const icoDv = new DataView(icoBuffer);
+            if (ico.length < 6 || icoDv.getUint16(0, true) !== 0 || icoDv.getUint16(2, true) !== 1)
+                throw new Error('Invalid ICO');
+            const iconCount = icoDv.getUint16(4, true);
+            if (iconCount === 0) throw new Error('ICO empty');
+            const e_lfanew = dv.getUint32(0x3C, true);
+            const numSections = dv.getUint16(e_lfanew + 6, true);
+            const optHdrSize = dv.getUint16(e_lfanew + 20, true);
+            const optHdrStart = e_lfanew + 4 + 20;
+            const isPE32Plus = dv.getUint16(optHdrStart, true) === 0x20b;
+            const secAlign = dv.getUint32(optHdrStart + 32, true);
+            const fileAlign = dv.getUint32(optHdrStart + 36, true);
+            const secHdrOff = optHdrStart + optHdrSize;
+            const sections = [];
+            for (let i = 0; i < numSections; i++) {
+                const off = secHdrOff + i * 40;
+                let name = '';
+                for (let j = 0; j < 8 && pe[off + j]; j++) name += String.fromCharCode(pe[off + j]);
+                sections.push({
+                    name: name,
+                    vSize: dv.getUint32(off + 8, true),
+                    vAddr: dv.getUint32(off + 12, true),
+                    rawSize: dv.getUint32(off + 16, true),
+                    rawPtr: dv.getUint32(off + 20, true),
+                    hdrOff: off
+                });
+            }
+            const rsrcIdx = sections.findIndex(s => s.name.startsWith('.rsrc'));
+            if (rsrcIdx < 0) throw new Error('No .rsrc');
+            const rsrc = sections[rsrcIdx];
+            const rsrcRaw = pe.slice(rsrc.rawPtr, rsrc.rawPtr + rsrc.rawSize);
+            const existing = parsePEResources(rsrcRaw, rsrc.vAddr);
+            const icoEntries = [];
+            for (let i = 0; i < iconCount; i++) {
+                const e = 6 + i * 16;
+                icoEntries.push({
+                    width: ico[e], height: ico[e+1], colorCount: ico[e+2], reserved: ico[e+3],
+                    planes: icoDv.getUint16(e+4, true), bitCount: icoDv.getUint16(e+6, true),
+                    bytesInRes: icoDv.getUint32(e+8, true), imageOffset: icoDv.getUint32(e+12, true)
+                });
+            }
+            const newRes = existing.filter(r => r.type !== 3 && r.type !== 14);
+            for (let i = 0; i < iconCount; i++) {
+                newRes.push({
+                    type: 3, id: i + 1, lang: 0x0409,
+                    data: ico.slice(icoEntries[i].imageOffset, icoEntries[i].imageOffset + icoEntries[i].bytesInRes)
+                });
+            }
+            const grp = new Uint8Array(6 + iconCount * 14);
+            const grpDv = new DataView(grp.buffer);
+            grpDv.setUint16(0, 0, true);
+            grpDv.setUint16(2, 1, true);
+            grpDv.setUint16(4, iconCount, true);
+            for (let i = 0; i < iconCount; i++) {
+                const o = 6 + i * 14;
+                grp[o] = icoEntries[i].width;
+                grp[o+1] = icoEntries[i].height;
+                grp[o+2] = icoEntries[i].colorCount;
+                grp[o+3] = icoEntries[i].reserved;
+                grpDv.setUint16(o+4, icoEntries[i].planes, true);
+                grpDv.setUint16(o+6, icoEntries[i].bitCount, true);
+                grpDv.setUint32(o+8, icoEntries[i].bytesInRes, true);
+                grpDv.setUint16(o+12, i + 1, true);
+            }
+            newRes.push({ type: 14, id: 1, lang: 0x0409, data: grp });
+            let maxEnd = 0;
+            for (const s of sections) {
+                const end = s.vAddr + Math.max(s.vSize, s.rawSize);
+                if (end > maxEnd) maxEnd = end;
+            }
+            const newVA = Math.ceil(maxEnd / secAlign) * secAlign;
+            const newRsrc = buildPEResources(newRes, newVA);
+            const newRawSize = Math.ceil(newRsrc.length / fileAlign) * fileAlign;
+            const newPe = new Uint8Array(pe.length + newRawSize);
+            newPe.set(pe, 0);
+            newPe.set(newRsrc, pe.length);
+            const nd = new DataView(newPe.buffer);
+            nd.setUint32(rsrc.hdrOff + 8, newRsrc.length, true);
+            nd.setUint32(rsrc.hdrOff + 12, newVA, true);
+            nd.setUint32(rsrc.hdrOff + 16, newRawSize, true);
+            nd.setUint32(rsrc.hdrOff + 20, pe.length, true);
+            nd.setUint32(optHdrStart + 56, Math.ceil((newVA + newRsrc.length) / secAlign) * secAlign, true);
+            const ddOff = isPE32Plus ? (optHdrStart + 112) : (optHdrStart + 96);
+            nd.setUint32(ddOff + 16, newVA, true);
+            nd.setUint32(ddOff + 20, newRsrc.length, true);
+            nd.setUint32(optHdrStart + 64, 0, true);
+            return newPe.buffer;
+        }
+
+        function parsePEResources(rsrcData, rsrcVA) {
+            const res = [];
+            const dv = new DataView(rsrcData.buffer, rsrcData.byteOffset, rsrcData.byteLength);
+            function parse(offset, level, type, id) {
+                if (offset + 16 > rsrcData.length) return;
+                const numNamed = dv.getUint16(offset + 12, true);
+                const numId = dv.getUint16(offset + 14, true);
+                for (let i = 0; i < numNamed + numId; i++) {
+                    const eOff = offset + 16 + i * 8;
+                    if (eOff + 8 > rsrcData.length) break;
+                    const nameOrId = dv.getUint32(eOff, true);
+                    const offToData = dv.getUint32(eOff + 4, true);
+                    const isSub = (offToData & 0x80000000) !== 0;
+                    const actOff = offToData & 0x7FFFFFFF;
+                    const eid = (nameOrId & 0x80000000) ? -1 : nameOrId;
+                    if (level === 0) type = eid;
+                    else if (level === 1) id = eid;
+                    if (isSub) {
+                        parse(actOff, level + 1, type, id);
+                    } else {
+                        if (actOff + 16 > rsrcData.length) break;
+                        const rva = dv.getUint32(actOff, true);
+                        const size = dv.getUint32(actOff + 4, true);
+                        const dataOff = rva - rsrcVA;
+                        if (dataOff >= 0 && dataOff + size <= rsrcData.length) {
+                            res.push({
+                                type: type, id: id,
+                                lang: level === 2 ? eid : 0x0409,
+                                data: rsrcData.slice(dataOff, dataOff + size)
+                            });
+                        }
+                    }
+                }
+            }
+            parse(0, 0, null, null);
+            return res;
+        }
+
+        function buildPEResources(resources, rsrcVA) {
+            const tree = {};
+            for (const r of resources) {
+                if (!tree[r.type]) tree[r.type] = {};
+                if (!tree[r.type][r.id]) tree[r.type][r.id] = {};
+                tree[r.type][r.id][r.lang] = r.data;
+            }
+            const types = Object.keys(tree).map(Number).sort((a, b) => a - b);
+            let dirSize = 16 + 8 * types.length;
+            const typeInfo = [];
+            for (const t of types) {
+                const ids = Object.keys(tree[t]).map(Number).sort((a, b) => a - b);
+                const tDirOff = dirSize;
+                dirSize += 16 + 8 * ids.length;
+                const idInfo = [];
+                for (const id of ids) {
+                    const langs = Object.keys(tree[t][id]).map(Number).sort((a, b) => a - b);
+                    const iDirOff = dirSize;
+                    dirSize += 16 + 8 * langs.length;
+                    idInfo.push({ id, langs, iDirOff });
+                }
+                typeInfo.push({ type: t, ids, tDirOff, idInfo });
+            }
+            let numEntries = 0;
+            for (const ti of typeInfo) for (const ii of ti.idInfo) numEntries += ii.langs.length;
+            const dataEntStart = dirSize;
+            const resDataStart = dataEntStart + numEntries * 16;
+            let totalResSize = 0;
+            for (const r of resources) totalResSize += r.data.length;
+            const buf = new Uint8Array(resDataStart + totalResSize);
+            const dv = new DataView(buf.buffer);
+            let p = 0;
+            dv.setUint32(p, 0, true); p += 4;
+            dv.setUint32(p, 0, true); p += 4;
+            dv.setUint16(p, 0, true); p += 2;
+            dv.setUint16(p, 0, true); p += 2;
+            dv.setUint16(p, 0, true); p += 2;
+            dv.setUint16(p, types.length, true); p += 2;
+            for (let i = 0; i < types.length; i++) {
+                dv.setUint32(p, types[i], true); p += 4;
+                dv.setUint32(p, typeInfo[i].tDirOff | 0x80000000, true); p += 4;
+            }
+            for (const ti of typeInfo) {
+                p = ti.tDirOff;
+                dv.setUint32(p, 0, true); p += 4;
+                dv.setUint32(p, 0, true); p += 4;
+                dv.setUint16(p, 0, true); p += 2;
+                dv.setUint16(p, 0, true); p += 2;
+                dv.setUint16(p, 0, true); p += 2;
+                dv.setUint16(p, ti.ids.length, true); p += 2;
+                for (const ii of ti.idInfo) {
+                    dv.setUint32(p, ii.id, true); p += 4;
+                    dv.setUint32(p, ii.iDirOff | 0x80000000, true); p += 4;
+                }
+            }
+            let entryIdx = 0;
+            let dataPos = resDataStart;
+            for (const ti of typeInfo) {
+                for (const ii of ti.idInfo) {
+                    p = ii.iDirOff;
+                    dv.setUint32(p, 0, true); p += 4;
+                    dv.setUint32(p, 0, true); p += 4;
+                    dv.setUint16(p, 0, true); p += 2;
+                    dv.setUint16(p, 0, true); p += 2;
+                    dv.setUint16(p, 0, true); p += 2;
+                    dv.setUint16(p, ii.langs.length, true); p += 2;
+                    for (const lang of ii.langs) {
+                        const entOff = dataEntStart + entryIdx * 16;
+                        dv.setUint32(p, lang, true); p += 4;
+                        dv.setUint32(p, entOff, true); p += 4;
+                        const d = tree[ti.type][ii.id][lang];
+                        dv.setUint32(entOff, rsrcVA + dataPos, true);
+                        dv.setUint32(entOff + 4, d.length, true);
+                        dv.setUint32(entOff + 8, 0, true);
+                        dv.setUint32(entOff + 12, 0, true);
+                        buf.set(d, dataPos);
+                        dataPos += d.length;
+                        entryIdx++;
+                    }
+                }
+            }
+            return buf;
+        }
+
         // ===== Pack (Generate EXE directly in browser) =====
         async function startPack() {
             if (isPacking) return;
@@ -1272,6 +1574,17 @@ https://github.com/nodeca/pako/blob/main/LICENSE
                 if (iconFile && iconArrayBuffer) {
                     iconData = iconArrayBuffer;
                     iconLen = iconArrayBuffer.byteLength;
+                    // Convert non-ICO images to ICO format for proper icon support
+                    if (!isICOFormat(iconData)) {
+                        try {
+                            updateProgress(25, '正在转换图标为 ICO 格式...');
+                            iconData = await convertImageToICO(iconData);
+                            iconLen = iconData.byteLength;
+                            console.log('Icon converted to ICO: ' + iconLen + ' bytes');
+                        } catch(e) {
+                            console.warn('Icon conversion failed: ' + e.message);
+                        }
+                    }
                     updateProgress(30, '图标数据已加载: ' + iconLen + ' bytes');
                 } else {
                     updateProgress(30, '无自定义图标，使用默认图标');
@@ -1345,13 +1658,26 @@ https://github.com/nodeca/pako/blob/main/LICENSE
                 // END_MAGIC = 0x454E4421 (little-endian)
                 view.setUint32(offset, 0x454E4421, true); offset += 4;
 
+                // Inject icon into PE resources (for file icon in Windows Explorer)
+                let peBuffer = templateExeBuffer;
+                if (iconData && iconLen > 0 && isICOFormat(iconData)) {
+                    try {
+                        updateProgress(85, '正在注入图标资源...');
+                        peBuffer = injectIconToPE(templateExeBuffer, iconData);
+                        console.log('Icon injected into PE: ' + peBuffer.byteLength + ' bytes');
+                    } catch(e) {
+                        console.warn('PE icon injection failed: ' + e.message);
+                        peBuffer = templateExeBuffer;
+                    }
+                }
+
                 updateProgress(90, '正在合并 EXE...');
 
-                // Concatenate: template.exe + tail data
-                const exeSize = templateExeBuffer.byteLength + tailSize;
+                // Concatenate: PE + tail data
+                const exeSize = peBuffer.byteLength + tailSize;
                 const exeBuffer = new Uint8Array(exeSize);
-                exeBuffer.set(new Uint8Array(templateExeBuffer), 0);
-                exeBuffer.set(tailBytes, templateExeBuffer.byteLength);
+                exeBuffer.set(new Uint8Array(peBuffer), 0);
+                exeBuffer.set(tailBytes, peBuffer.byteLength);
 
                 updateProgress(100, 'EXE 生成完成！');
 
