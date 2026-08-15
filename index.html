@@ -786,6 +786,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
                 <label class="checkbox-item active">
                     <input type="checkbox" id="chkCenter" checked> 居中
                 </label>
+                <label class="checkbox-item">
+                    <input type="checkbox" id="chkFullscreen"> 全屏
+                </label>
             </div>
 
             <div class="divider"></div>
@@ -1352,14 +1355,15 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             const newVA = Math.ceil(maxEnd / secAlign) * secAlign;
             const newRsrc = buildPEResources(newRes, newVA);
             const newRawSize = Math.ceil(newRsrc.length / fileAlign) * fileAlign;
-            const newPe = new Uint8Array(pe.length + newRawSize);
+            const newRsrcRawPtr = Math.ceil(pe.length / fileAlign) * fileAlign;
+            const newPe = new Uint8Array(newRsrcRawPtr + newRawSize);
             newPe.set(pe, 0);
-            newPe.set(newRsrc, pe.length);
+            newPe.set(newRsrc, newRsrcRawPtr);
             const nd = new DataView(newPe.buffer);
             nd.setUint32(rsrc.hdrOff + 8, newRsrc.length, true);
             nd.setUint32(rsrc.hdrOff + 12, newVA, true);
             nd.setUint32(rsrc.hdrOff + 16, newRawSize, true);
-            nd.setUint32(rsrc.hdrOff + 20, pe.length, true);
+            nd.setUint32(rsrc.hdrOff + 20, newRsrcRawPtr, true);
             nd.setUint32(optHdrStart + 56, Math.ceil((newVA + newRsrc.length) / secAlign) * secAlign, true);
             const ddOff = isPE32Plus ? (optHdrStart + 112) : (optHdrStart + 96);
             nd.setUint32(ddOff + 16, newVA, true);
@@ -1552,6 +1556,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
                 const onTop = document.getElementById('chkTopmost').checked ? 1 : 0;
                 const tray = document.getElementById('chkTray').checked ? 1 : 0;
                 const center = document.getElementById('chkCenter').checked ? 1 : 0;
+                const fullscreen = document.getElementById('chkFullscreen').checked ? 1 : 0;
 
                 // Escape quotes in strings to match C sprintf behavior
                 const safeName = appName.replace(/"/g, '');
@@ -1564,7 +1569,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
                     '","url":"' + safeUrl + '","scrollText":"' + safeScroll +
                     '","allowMaximize":' + allowMax + ',"allowMinimize":' + allowMin +
                     ',"alwaysOnTop":' + onTop + ',"systemTray":' + tray +
-                    ',"centerWindow":' + center + '}';
+                    ',"centerWindow":' + center + ',"startFullscreen":' + fullscreen + '}';
 
                 updateProgress(20, '配置构建完成');
 
