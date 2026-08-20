@@ -131,7 +131,7 @@
 | 退出程序 | 退出打包器 |
 
 ### 授权说明
-
+   授权目的是防止有人恶意行为 
 - 打包器需配合 `license.lic` 授权文件使用，授权文件需与 EXE 放在同一目录
 - 授权文件采用 XOR 加密 + Base64 编码算法生成，包含有效期信息
 - 启动时自动验证授权，界面标题栏显示授权到期时间
@@ -163,39 +163,6 @@
 
 > **声明**：本软件不含任何恶意代码、后门或远程控制功能。CobaltStrike 相关报障纯属启发式误报，程序行为完全透明可控。
 
----
-
-## 目录结构
-
-```
-HtmlToExe-C/
-├── packager.c              # 打包器主程序源码（C 语言）
-├── packager.rc             # 打包器资源文件（对话框、图标定义）
-├── template.cpp            # 模板程序源码（C++，打包后程序的基础）
-├── template.rc             # 模板程序资源文件
-├── resource.h              # 资源头文件（控件 ID 定义）
-├── icon_util.h             # 图标工具头文件
-├── app.ico                 # 应用图标
-├── license.lic             # 授权文件
-├── miniz.c / miniz.h       # Miniz 压缩库源码
-├── miniz_tdef.c            # Miniz 压缩实现
-├── miniz_tinfl.c           # Miniz 解压实现
-├── miniz_zip.c             # Miniz ZIP 实现
-├── 构建命令.txt             # 完整编译构建命令
-├── packager_log.txt        # 打包器运行日志
-├── microsoft.web.webview2.1.0.4129.50/  # WebView2 SDK
-├── webview2/               # WebView2 库文件
-└── 分发/                    # 分发目录
-    ├── 构建程序/
-    │   ├── HtmlToExe打包器.exe   # 打包器可执行文件
-    │   └── license.lic           # 授权文件
-    ├── web/                       # 网页版打包工具
-    │   └── HtmlToExe-Web.html     # 在线版打包器（单文件，可部署到静态平台）
-    ├── 打包输出/                  # 打包后的程序输出目录
-    └── 使用说明.txt
-```
-
----
 
 ## 构建方法
 
@@ -230,30 +197,6 @@ windres packager.rc -o packager_res.o
 gcc packager.c miniz.o miniz_tdef.o miniz_tinfl.o miniz_zip.o packager_res.o -o packager.exe \
     -mwindows -municode -lwinhttp -lcomctl32 -luser32 -lgdi32 -lshell32 -lole32 -luuid \
     -static -static-libgcc
-```
-
-### 授权文件生成
-
-使用 Python 生成授权文件（仅生成授权，不参与程序编译）：
-
-```python
-import base64
-
-_ENCRYPT_KEY = "Journeyer+kejizhixing2019"
-
-def _xor_encrypt(data, key):
-    key_bytes = key.encode()
-    return bytes(data[i] ^ key_bytes[i % len(key_bytes)] for i in range(len(data)))
-
-def encrypt_license_date(date_str):
-    plain = date_str.encode()
-    encrypted = _xor_encrypt(plain, _ENCRYPT_KEY)
-    return base64.b64encode(encrypted).decode()
-
-# 生成有效期到 2026-12-31 的授权
-license_content = encrypt_license_date("2026-12-31")
-with open("license.lic", "w", encoding="utf-8") as f:
-    f.write(license_content)
 ```
 
 ---
